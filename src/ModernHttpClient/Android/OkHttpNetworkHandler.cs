@@ -18,6 +18,7 @@ namespace ModernHttpClient
     public class NativeMessageHandler : HttpClientHandler
     {
         readonly OkHttpClient client = new OkHttpClient();
+        readonly CacheControl noCacheCacheControl = default(CacheControl);
         readonly bool throwOnCaptiveNetwork;
 
         readonly Dictionary<HttpRequestMessage, WeakReference> registeredProgressCallbacks =
@@ -27,6 +28,8 @@ namespace ModernHttpClient
                 {"User-Agent", " "}
             };
 
+        public bool DisableCaching { get; set; }
+
         public NativeMessageHandler() : this(false, false) {}
 
         public NativeMessageHandler(bool throwOnCaptiveNetwork, bool customSSLVerification, NativeCookieHandler cookieHandler = null)
@@ -34,6 +37,7 @@ namespace ModernHttpClient
             this.throwOnCaptiveNetwork = throwOnCaptiveNetwork;
 
             if (customSSLVerification) client.SetHostnameVerifier(new HostnameVerifier());
+            noCacheCacheControl = (new CacheControl.Builder()).NoCache().Build();
         }
 
         public void RegisterForProgress(HttpRequestMessage request, ProgressDelegate callback)
@@ -64,10 +68,12 @@ namespace ModernHttpClient
             }
         }
 
-        private string GetHeaderSeparator(string name)
+        string getHeaderSeparator(string name)
         {
-            if (headerSeparators.ContainsKey(name))
+            if (headerSeparators.ContainsKey(name)) {
                 return headerSeparators[name];
+            }
+
             return ",";
         }
 
@@ -80,7 +86,7 @@ namespace ModernHttpClient
             if (request.Content != null) {
                 var bytes = await request.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
 
-                var contentType = string.Empty;
+                var contentType = "text/plain";
                 if (request.Content.Headers.ContentType != null) {
                     contentType = String.Join(" ", request.Content.Headers.GetValues("Content-Type"));
                 }
@@ -91,12 +97,16 @@ namespace ModernHttpClient
                 .Method(request.Method.Method.ToUpperInvariant(), body)
                 .Url(url);
 
+            if (DisableCaching) {
+                builder.CacheControl(noCacheCacheControl);
+            }
+
             var keyValuePairs = request.Headers
                 .Union(request.Content != null ?
                     (IEnumerable<KeyValuePair<string, IEnumerable<string>>>)request.Content.Headers :
                     Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>());
 
-            foreach (var kvp in keyValuePairs) builder.AddHeader(kvp.Key, String.Join(GetHeaderSeparator(kvp.Key), kvp.Value));
+            foreach (var kvp in keyValuePairs) builder.AddHeader(kvp.Key, String.Join(getHeaderSeparator(kvp.Key), kvp.Value));
 
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -133,7 +143,7 @@ namespace ModernHttpClient
             ret.RequestMessage = request;
             ret.ReasonPhrase = resp.Message();
             if (respBody != null) {
-                var content = new ProgressStreamContent(respBody.ByteStream(), cancellationToken);
+                var content = new ProgressStreamContent(respBody.ByteStream(), CancellationToken.None);
                 content.Progress = getAndRemoveCallbackFromRegister(request);
                 ret.Content = content;
             } else {
